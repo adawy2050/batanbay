@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the accompanying manuscript."
+title: "Hydroclimate redistribution, nutrient hotspots, and tide--depth oxygen structure in a tropical estuary with recurrent HAB impacts (Batan Bay, Philippines)"
+type: software
+authors:
+  - given-names: Ahmed
+    family-names: Eladawy
+license: MIT
+repository-code: "https://github.com/adawy2050/batanbay"
