@@ -21,7 +21,6 @@ Outputs:
 - {OUT_DIR}/tables/nutr_out_of_domain_points.csv     (if any removed)
 - plus: matched table, sensitivity table, VP table, partial spearman tables, fingerprint table
 
-Ahmed — updated for your workflow.
 """
 
 import os
