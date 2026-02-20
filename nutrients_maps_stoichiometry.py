@@ -12,20 +12,21 @@ from matplotlib.colors import Normalize
 from matplotlib.cm import ScalarMappable
 
 # ============================================================
-# USER SETTINGS
+# Configuration
 # ============================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 tiff_path = os.path.join(DATA_DIR, "basemap", "L15-1720E-1090N.tif")
 
-# inlet_coords given as (lat, lon)
+# Inlet coordinates given as (lat, lon)
 inlet_lat, inlet_lon = 11.596509, 122.492519
 
-# If True: for DIN:PO4 ratio, substitute PO4<=0 with a small epsilon (removes open circles, but is an assumption)
+# If True, replace PO4 <= 0 with a small epsilon for DIN:PO4 ratio calculations.
+# This removes open circles in the ratio map but adds an assumption.
 SUBSTITUTE_NONPOSITIVE_PO4_FOR_RATIO = False
 PO4_EPS_UMOL = 0.05  # µmol P/L used if substitution is enabled (choose conservatively)
 
-# Robust color scaling for maps (percentiles) to avoid one outlier compressing all colors
+# Robust color scaling (percentiles) to prevent single outliers from compressing the colormap
 ROBUST_LIMITS = True
 ROBUST_PCT = (2, 98)
 
@@ -34,7 +35,7 @@ out_dir = os.path.join(BASE_DIR, "outputs", "nutrients")
 fig_dpi = 450
 
 # ============================================================
-# DATA (ORDERED LIST, NOT SET)
+# Data (ordered list, not a set)
 # ============================================================
 SAMPLES = [f"PH{i}" for i in range(21, 52)] + [f"PH{i}" for i in range(1, 21)]
 
@@ -55,7 +56,7 @@ Lat = np.array([11.575491,11.589536,11.59897,11.613281,11.601877,11.60379,11.591
 Lon = np.array([122.492891,122.491819,122.49434,122.492076,122.499438,122.51008,122.487343,122.4787,122.471365,122.471807,122.450569,122.443848,122.440228,122.435937,122.426047,122.43986,122.42996,122.423967,122.41643,122.427856,122.413589,122.393809,122.408788,122.408486,122.396703,122.408292,122.412004,122.408047,122.407781,122.38256,122.394101,122.41728,122.41652,122.41584,122.42347,122.43062,122.43263,122.43606,122.44161,122.44855,122.446321,122.451914,122.456838,122.465624,122.488586,122.451098,122.466785,122.479122,122.477287,122.459473,122.463607])
 
 # ============================================================
-# HELPERS
+# Helper functions
 # ============================================================
 def haversine_km(lat1, lon1, lat2, lon2):
     """Great-circle distance (km)."""
@@ -83,7 +84,7 @@ def add_scalebar_km(ax, length_km=2.0, loc=(0.08, 0.10), lw=3, text_offset=0.02)
     x0 = xmin + (xmax-xmin)*loc[0]
     y0 = ymin + (ymax-ymin)*loc[1]
 
-    # meters per degree lon at this latitude (approx)
+    # Approximate meters per degree longitude at this latitude
     m_per_deg_lon = 111320.0 * np.cos(np.deg2rad(y0))
     deg_len = (length_km*1000.0)/m_per_deg_lon
 
@@ -92,7 +93,7 @@ def add_scalebar_km(ax, length_km=2.0, loc=(0.08, 0.10), lw=3, text_offset=0.02)
             ha="left", va="bottom", fontsize=9, color="k")
 
 # ============================================================
-# UNIT CONVERSIONS + DERIVED VARIABLES
+# Unit conversions and derived variables
 # ============================================================
 mgN_to_umolN = 1000.0 / 14.0
 mgP_to_umolP = 1000.0 / 31.0
@@ -102,10 +103,10 @@ NO3_umol = NO3 * mgN_to_umolN
 NH4_umol = NH4 * mgN_to_umolN
 PO4_umol = PO4 * mgP_to_umolP
 
-# DIN in µmol N/L (N species only; consistent stoichiometry)
+# DIN in umol N/L (nitrogen species only)
 DIN_umol = NO2_umol + NO3_umol + NH4_umol
 
-# distance to inlet (km)
+# Distance to inlet (km)
 dist_km = haversine_km(Lat, Lon, inlet_lat, inlet_lon)
 
 # DIN:PO4 ratio (molar)
@@ -117,12 +118,12 @@ if SUBSTITUTE_NONPOSITIVE_PO4_FOR_RATIO:
     DIN_PO4 = np.where(ratio_mask & (PO4_for_ratio != 0), DIN_umol / PO4_for_ratio, np.nan)
     ratio_undefined = np.zeros_like(DIN_PO4, dtype=bool)  # none shown as undefined
 else:
-    # Undefined where PO4 <= 0
+    # Ratio is undefined where PO4 <= 0
     ratio_undefined = ratio_mask & (PO4_for_ratio <= 0)
     DIN_PO4 = np.where(ratio_mask & (PO4_for_ratio > 0), DIN_umol / PO4_for_ratio, np.nan)
 
 # ============================================================
-# LOAD + REPROJECT BASEMAP
+# Load and reproject basemap
 # ============================================================
 with rasterio.open(tiff_path) as src:
     dst_crs = "EPSG:4326"
@@ -140,7 +141,7 @@ with rasterio.open(tiff_path) as src:
             resampling=Resampling.nearest
         )
 
-# RGB or single-band
+# Use RGB if available, otherwise single-band raster
 if dst_data.shape[0] >= 3:
     basemap_img = np.dstack([dst_data[0], dst_data[1], dst_data[2]])
 else:
@@ -152,7 +153,7 @@ ymax = transform.f
 ymin = ymax + h * transform.e
 raster_extent = [xmin, xmax, ymin, ymax]
 
-# extent focusing on station cloud
+# Map extent focused on station locations
 lon_min, lon_max = Lon.min(), Lon.max()
 lat_min, lat_max = Lat.min(), Lat.max()
 lon_buf = (lon_max - lon_min) * 0.07
@@ -160,7 +161,7 @@ lat_buf = (lat_max - lat_min) * 0.07
 data_extent = [lon_min - lon_buf, lon_max + lon_buf, lat_min - lat_buf, lat_max + lat_buf]
 
 # ============================================================
-# FIGURE 1 — 6 nutrient maps (FILLED POINTS, NO EMPTY MARKERS)
+# Figure 1: six nutrient maps (filled points only)
 # ============================================================
 params_maps = [
     ("NO₂ (mg L⁻¹)", NO2),
@@ -187,7 +188,7 @@ for ax, (lab, vals), p in zip(axes.flat, params_maps, panel_letters):
     )
     ax.set_extent(data_extent, crs=ccrs.PlateCarree())
 
-    # filled points for ALL finite values (including negatives and zeros)
+    # Plot all finite values, including negatives and zeros
     finite = np.isfinite(vals)
 
     if ROBUST_LIMITS:
@@ -204,13 +205,13 @@ for ax, (lab, vals), p in zip(axes.flat, params_maps, panel_letters):
         transform=ccrs.PlateCarree(), zorder=3
     )
 
-    # inlet marker
+    # Inlet marker
     ax.scatter([inlet_lon], [inlet_lat], marker="^", s=110, facecolor="white",
                edgecolor="k", linewidth=1.2, transform=ccrs.PlateCarree(), zorder=5)
     ax.text(inlet_lon, inlet_lat, " Inlet", transform=ccrs.PlateCarree(),
             fontsize=10, va="center", ha="left")
 
-    # scalebar only on first panel
+    # Draw scale bar on the first panel only
     if p == "a":
         add_scalebar_km(ax, 2.0)
 
@@ -218,7 +219,7 @@ for ax, (lab, vals), p in zip(axes.flat, params_maps, panel_letters):
     ax.text(0.01, 0.98, p, transform=ax.transAxes, ha="left", va="top",
             fontsize=12, fontweight="bold")
 
-    # horizontal colorbar per axis
+    # Horizontal colorbar per panel
     sm = ScalarMappable(norm=norm, cmap="viridis")
     sm.set_array(vals[finite])
     cbar = plt.colorbar(sm, ax=ax, orientation="horizontal", pad=0.05, fraction=0.06)
@@ -228,8 +229,7 @@ for ax, (lab, vals), p in zip(axes.flat, params_maps, panel_letters):
 
 fig.suptitle("Spatial distribution of dissolved nutrients across Batan Estuary stations", fontsize=15, y=1.02)
 
-# save
-import os
+# Save figure
 os.makedirs(out_dir, exist_ok=True)
 fig1_png = os.path.join(out_dir, "Fig_Nutrients_Maps.png")
 fig1_pdf = os.path.join(out_dir, "Fig_Nutrients_Maps.pdf")
@@ -241,25 +241,25 @@ print("[OK] Saved:", fig1_png)
 print("[OK] Saved:", fig1_pdf)
 
 # ============================================================
-# FIGURE 2 — Stoichiometry diagnostics (2 panels ONLY)
-#   Left: DIN vs PO4 (colored by distance)
-#   Right: Map of DIN:PO4 (undefined PO4<=0 shown as open circles)
+# Figure 2: stoichiometry diagnostics (2 panels)
+# Left: DIN vs PO4, colored by distance to inlet
+# Right: DIN:PO4 map; points with PO4 <= 0 are shown as open circles
 # ============================================================
 fig2 = plt.figure(figsize=(16, 6), constrained_layout=True)
 gs = fig2.add_gridspec(1, 2, width_ratios=[1.05, 1.0])
 
-# ---- Panel a: DIN vs PO4
+# Panel a: DIN vs PO4
 axa = fig2.add_subplot(gs[0, 0])
 
 finite_np = np.isfinite(DIN_umol) & np.isfinite(PO4_umol)
-# Keep all finite points (including PO4<=0) for scatter; but Redfield line shown for x>=0
+# Keep all finite points in the scatter; draw Redfield line only for x >= 0
 sc = axa.scatter(
     PO4_umol[finite_np], DIN_umol[finite_np],
     c=dist_km[finite_np], cmap="viridis",
     s=70, edgecolor="k", linewidth=0.5
 )
 
-# Redfield reference (DIN = 16 * PO4), only for x>=0 range
+# Redfield reference (DIN = 16 * PO4), shown only for x >= 0
 x_ref = np.linspace(max(0, np.nanmin(PO4_umol[finite_np])), np.nanmax(PO4_umol[finite_np]), 200)
 axa.plot(x_ref, 16.0*x_ref, ls="--", lw=2.0, color="k")
 axa.text(0.02, 0.05, "Redfield N:P = 16", transform=axa.transAxes, fontsize=10)
@@ -274,7 +274,7 @@ axa.grid(True, alpha=0.25)
 axa.text(0.01, 0.98, "a", transform=axa.transAxes, ha="left", va="top",
          fontsize=12, fontweight="bold")
 
-# ---- Panel b: Map of DIN:PO4
+# Panel b: DIN:PO4 map
 axb = fig2.add_subplot(gs[0, 1], projection=ccrs.PlateCarree())
 
 axb.imshow(
@@ -293,7 +293,7 @@ else:
 
 norm_r = Normalize(vmin=vmin_r, vmax=vmax_r)
 
-# colored points (ratio defined)
+# Colored points where the ratio is defined
 axb.scatter(
     Lon[finite_ratio], Lat[finite_ratio],
     c=DIN_PO4[finite_ratio], cmap="viridis", norm=norm_r,
@@ -301,7 +301,7 @@ axb.scatter(
     transform=ccrs.PlateCarree(), zorder=3
 )
 
-# undefined ratio (PO4<=0) as open circles (scientifically correct)
+# Show undefined ratios (PO4 <= 0) as open circles
 if np.any(ratio_undefined):
     axb.scatter(
         Lon[ratio_undefined], Lat[ratio_undefined],
@@ -311,7 +311,7 @@ if np.any(ratio_undefined):
     )
     axb.legend(loc="lower left", frameon=True, fontsize=9)
 
-# inlet + scalebar
+# Inlet marker and scale bar
 axb.scatter([inlet_lon], [inlet_lat], marker="^", s=110, facecolor="white",
             edgecolor="k", linewidth=1.2, transform=ccrs.PlateCarree(), zorder=5)
 axb.text(inlet_lon, inlet_lat, " Inlet", transform=ccrs.PlateCarree(), fontsize=10, va="center", ha="left")
@@ -339,7 +339,7 @@ print("[OK] Saved:", fig2_png)
 print("[OK] Saved:", fig2_pdf)
 
 # ============================================================
-# QC PRINT (so you can see why any open circles exist in ratio map)
+# Quick QC printout to explain open-circle counts in the ratio map
 # ============================================================
 print("\nQC (counts):")
 print("N stations:", len(SAMPLES))

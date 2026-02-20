@@ -2,25 +2,22 @@
 # Copyright Ahmed Eladawy
 
 """
-AAQ + Nutrients (Batan Bay) — Nature-style multivariate + spatial inference (v5.2)
+AAQ and nutrient analysis for Batan Bay (v5.2).
 
-WHAT'S NEW vs v4:
-- Robustly removes any AAQ/nutrient points outside the BASEMAP GeoTIFF extent
-  (prevents extreme out-of-domain points from ruining map zoom; exports removed IDs).
-- Enforces one-to-one / unique AAQ stations in nutrient matching (keeps closest match per station).
-- MAIN figure simplified to 4 panels (map, PCA regimes, mixing axis boxplot, variation partitioning).
-- SUPP figure reorganized to 4 panels (2×2): constrained ordination, sensitivity, partial Spearman, fingerprint.
-  (removes two least-informative panels: match-distance histogram and pairing-diagnostics mini-map).
-- Optional block-permutation p-value (permute predictors within regimes) to partially address spatial dependence.
+This script builds the main and supplementary figures and exports all analysis tables.
+Key updates in this version:
+- Filters AAQ and nutrient points to the basemap extent and exports removed points.
+- Enforces one-to-one AAQ station matching on the nutrient side (closest match kept).
+- Uses a 4-panel main figure and a 4-panel supplementary figure.
+- Adds optional block permutation (within regimes) to reduce spatial-dependence bias.
 
-Outputs:
+Main outputs:
 - {OUT_DIR}/figures/AAQ_nutrients_MAIN_v5_2_k{K_BEST}.png/pdf
 - {OUT_DIR}/figures/AAQ_nutrients_SUPP_v5_2_k{K_BEST}.png/pdf
 - {OUT_DIR}/tables/aaq_station_features_all.csv
-- {OUT_DIR}/tables/aaq_out_of_domain_stations.csv   (if any removed)
-- {OUT_DIR}/tables/nutr_out_of_domain_points.csv     (if any removed)
-- plus: matched table, sensitivity table, VP table, partial spearman tables, fingerprint table
-
+- {OUT_DIR}/tables/aaq_out_of_domain_stations.csv (if any removed)
+- {OUT_DIR}/tables/nutr_out_of_domain_points.csv (if any removed)
+- Additional matched, sensitivity, variation-partitioning, partial-Spearman, and regime-fingerprint tables.
 """
 
 import os
@@ -47,7 +44,7 @@ from rasterio.warp import transform as rio_transform
 
 
 # =============================================================================
-# USER SETTINGS
+# Configuration
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 AAQ_DIR = os.path.join(BASE_DIR, "data", "AAQ", "EXTRACTED2024")
@@ -57,7 +54,7 @@ SAL_CSV  = os.path.join(AAQ_DIR, "extracted_sal_data.csv")
 CHLA_CSV = os.path.join(AAQ_DIR, "extracted_chla_data.csv")
 TURB_CSV = os.path.join(AAQ_DIR, "extracted_turb_data.csv")
 
-# Basemap GeoTIFF (defines your plotting/in-domain extent)
+# Basemap GeoTIFF used for plotting and domain filtering
 BASEMAP_TIF = os.path.join(BASE_DIR, "data", "basemap", "L15-1720E-1090N.tif")
 
 INLET_LATLON = (11.596509, 122.492519)  # (lat, lon)
@@ -68,33 +65,33 @@ TAB_DIR = os.path.join(OUT_DIR, "tables")
 
 RANDOM_SEED = 42
 
-# smoothing
+# Smoothing
 K_BEST = 7
 K_LIST = [1, 3, 5, 7]
 
-# clustering regimes in AAQ-state space
+# Number of AAQ-state regimes for clustering
 N_REGIMES = 4
 
-# nutrient pairing selection
+# Nutrient pairing settings
 USE_N_CLOSEST = True
 N_CLOSEST = 15
 MAX_DIST_KM = 2.0
 
-# enforce one-to-one / unique AAQ stations in matched subset
+# Enforce one-to-one AAQ station matching in the paired dataset
 ENFORCE_UNIQUE_AAQ_STATIONS = True
 
-# sensitivity thresholds for match distance (km)
+# Distance thresholds (km) used in sensitivity checks
 MATCH_THRESHOLDS = [0.25, 0.5, 1.0, 2.0, None]
 
 # permutation settings
 N_PERM_NAIVE = 999
 N_PERM_SENS  = 499
 
-# OPTIONAL: block permutation (within regimes) to reduce inflated significance under spatial dependence
+# Optional: block permutation within regimes to reduce inflated significance under spatial dependence
 DO_BLOCK_PERM = True
 N_PERM_BLOCK = 999
 
-# Domain filter: remove points outside basemap bounds (recommended ON)
+# Domain filter: remove points outside basemap bounds (recommended)
 FILTER_TO_BASEMAP_EXTENT = True
 BASEMAP_BUFFER = 0.0  # in CRS units (meters for projected CRS); keep 0 unless needed
 
@@ -102,7 +99,7 @@ VERSION_TAG = "v5_2"
 
 
 # =============================================================================
-# NUTRIENT ARRAYS (your inputs)
+# Nutrient arrays (input values)
 # =============================================================================
 
 NO2 = [0.067160098, -0.018266329, 0.033051532, -0.014772398, -0.023410952, 0.02010359,
@@ -180,7 +177,7 @@ Long = [122.492891, 122.491819, 122.49434, 122.492076, 122.499438, 122.51008, 12
 
 
 # =============================================================================
-# STYLE
+# Plot style
 # =============================================================================
 
 def set_style():
@@ -199,7 +196,7 @@ def set_style():
 
 
 # =============================================================================
-# HELPERS
+# Helper functions
 # =============================================================================
 
 def ensure_dirs():
@@ -366,10 +363,10 @@ def dbRDA_like(DY, XZ, n_axes_keep=8, n_perm=999, seed=42, blocks=None):
         r2_perm = np.asarray(r2_perm)
         p_naive = (np.sum(r2_perm >= r2) + 1) / (len(r2_perm) + 1)
 
-        # Block permutation (optional)
+        # Optional block permutation
         if blocks is not None:
             blocks = np.asarray(blocks)
-            # only if at least two blocks have size >=2
+            # Run only if at least two blocks have size >= 2
             ok_blocks = [b for b in np.unique(blocks) if np.sum(blocks == b) >= 2]
             if len(ok_blocks) >= 2:
                 r2_perm_b = []
@@ -494,12 +491,12 @@ def domain_mask_from_basemap(tif_path, lons, lats, buffer=0.0):
         if (crs is None) or ("epsg:4326" in str(crs).lower()):
             x = lons
             y = lats
-            # buffer in degrees if CRS is lat/lon
+            # Buffer in degrees if the raster CRS is geographic (lat/lon)
             buf = float(buffer)
             inb = (x >= (b.left - buf)) & (x <= (b.right + buf)) & (y >= (b.bottom - buf)) & (y <= (b.top + buf))
             return mask & inb
 
-        # projected: transform lon/lat to raster CRS then bounds-check in CRS units (meters)
+        # Projected CRS: transform lon/lat to raster CRS, then bounds-check in CRS units
         x, y = rio_transform("EPSG:4326", crs, lons.tolist(), lats.tolist())
         x = np.asarray(x, float)
         y = np.asarray(y, float)
@@ -583,7 +580,7 @@ def variation_partitioning_3sets(DY, X1, X2, X3, seed=42, blocks=None):
 
 
 # =============================================================================
-# LOAD + BUILD DATA
+# Load and prepare data
 # =============================================================================
 
 def load_aaq():
@@ -662,13 +659,13 @@ def build_nutrients():
     return df
 
 def match_nutrients_to_aaq(nutr, aaq, group_col, lat_col, lon_col, max_match_km=None, enforce_unique=True):
-    # choose nutrient points
+    # Select nutrient points
     if USE_N_CLOSEST:
         selected = nutr.nsmallest(N_CLOSEST, "nut_dist_inlet_km").copy()
     else:
         selected = nutr[nutr["nut_dist_inlet_km"] <= MAX_DIST_KM].copy()
 
-    # build AAQ KDTree
+    # Build KDTree for AAQ station lookups
     aaq_valid = aaq.dropna(subset=[lat_col, lon_col]).copy()
     aaq_latlon = aaq_valid[[lat_col, lon_col]].to_numpy(float)
     tree = cKDTree(local_xy(aaq_latlon))
@@ -687,7 +684,7 @@ def match_nutrients_to_aaq(nutr, aaq, group_col, lat_col, lon_col, max_match_km=
     if max_match_km is not None:
         selected = selected[selected["match_km"] <= max_match_km].copy()
 
-    # enforce unique AAQ station: keep closest nutrient for each AAQ station (one-to-one on AAQ side)
+    # Keep one nutrient point per AAQ station (closest match only)
     if enforce_unique:
         selected = (selected.sort_values("match_km")
                             .drop_duplicates(subset=["Nearest_AAQ_ID"], keep="first")
@@ -698,28 +695,24 @@ def match_nutrients_to_aaq(nutr, aaq, group_col, lat_col, lon_col, max_match_km=
 
 
 # =============================================================================
-# MAIN
+# Main execution
 # =============================================================================
 
 def main():
     ensure_dirs()
     set_style()
 
-    # ---------------------------------------------------------
     # Load raw data
-    # ---------------------------------------------------------
     aaq_all, group_col, lat_col, lon_col = load_aaq()
     nutr = build_nutrients()
 
-    # ensure numeric lat/lon
+    # Ensure numeric latitude/longitude values
     aaq_all[lat_col] = pd.to_numeric(aaq_all[lat_col], errors="coerce")
     aaq_all[lon_col] = pd.to_numeric(aaq_all[lon_col], errors="coerce")
     nutr["nut_lat"] = pd.to_numeric(nutr["nut_lat"], errors="coerce")
     nutr["nut_lon"] = pd.to_numeric(nutr["nut_lon"], errors="coerce")
 
-    # ---------------------------------------------------------
-    # Filter to basemap extent (removes extreme out-of-domain points)
-    # ---------------------------------------------------------
+    # Filter to basemap extent (removes out-of-domain points)
     if FILTER_TO_BASEMAP_EXTENT and os.path.exists(BASEMAP_TIF):
         maskA = domain_mask_from_basemap(BASEMAP_TIF, aaq_all[lon_col].to_numpy(float), aaq_all[lat_col].to_numpy(float), buffer=BASEMAP_BUFFER)
         removed = aaq_all.loc[~maskA, [group_col, lat_col, lon_col, "dist_inlet_km"]].copy()
@@ -733,9 +726,7 @@ def main():
             removedN.to_csv(os.path.join(TAB_DIR, "nutr_out_of_domain_points.csv"), index=False)
         nutr = nutr.loc[maskN].copy()
 
-    # ---------------------------------------------------------
-    # Define regimes using ALL in-domain AAQ stations
-    # ---------------------------------------------------------
+    # Define regimes using all in-domain AAQ stations
     AAQ_STATE_COLS = [
         "AAQ_Temp_mid3", "AAQ_Sal_mid3",
         "AAQ_Chla_log1p_mid3", "AAQ_Turb_log1p_mid3",
@@ -749,7 +740,7 @@ def main():
     aaq_use["lon"] = aaq_use[lon_col].to_numpy(float)
     aaq_use = aaq_use.dropna(subset=["lat", "lon"]).reset_index(drop=True)
 
-    # Export all-stations AAQ feature table
+    # Export AAQ features for all in-domain stations
     export_cols = [group_col, "lat", "lon", "dist_inlet_km"] + AAQ_STATE_COLS
     aaq_use[export_cols].to_csv(os.path.join(TAB_DIR, "aaq_station_features_all.csv"), index=False)
 
@@ -766,12 +757,10 @@ def main():
     km = KMeans(n_clusters=N_REGIMES, random_state=RANDOM_SEED, n_init=50)
     aaq_use["regime"] = km.fit_predict(scores_all)
 
-    # attach regimes back to AAQ table
+    # Attach regime labels back to the AAQ table
     aaq_all = aaq_all.merge(aaq_use[[group_col, "regime"]], on=group_col, how="inner")
 
-    # ---------------------------------------------------------
-    # Matched subset for nutrient inference (unique AAQ stations)
-    # ---------------------------------------------------------
+    # Build matched subset for nutrient inference (unique AAQ stations)
     df_all = match_nutrients_to_aaq(
         nutr, aaq_all, group_col, lat_col, lon_col,
         max_match_km=None,
@@ -786,7 +775,7 @@ def main():
 
     matched_ids = set(d0["Nearest_AAQ_ID"].astype(str).tolist())
 
-    # save matched table
+    # Save matched table
     d0.to_csv(os.path.join(TAB_DIR, "aaq_nutrients_matched_primary_uniqueAAQ.csv"), index=False)
 
     print(f"AAQ usable stations (in-domain): n={len(aaq_use)}")
@@ -795,13 +784,11 @@ def main():
         print("Match distance km summary:",
               float(d0["match_km"].min()), float(d0["match_km"].median()), float(d0["match_km"].max()))
 
-    # ---------------------------------------------------------
-    # Constrained structure (matched subset)
-    # ---------------------------------------------------------
+    # Constrained structure on the matched subset
     Y = d0[AAQ_STATE_COLS].to_numpy(float)
     coords = d0[["lat", "lon"]].to_numpy(float)
 
-    # blocks for block permutation (use regime labels of matched subset)
+    # Block labels used for block permutation (matched subset)
     blocks = d0["regime"].to_numpy(int) if (DO_BLOCK_PERM and len(d0) > 0) else None
 
     db_out = {}
@@ -825,9 +812,7 @@ def main():
     out_best = db_out[kbest]
     Zfit2 = out_best["Z_fit2"]
 
-    # ---------------------------------------------------------
     # Variation partitioning (matched subset)
-    # ---------------------------------------------------------
     n = len(d0)
     max_space_pc = min(4, max(1, n // 3))
     Sp = space_basis(coords, n_knots=4, max_pc=max_space_pc, seed=RANDOM_SEED)
@@ -847,9 +832,7 @@ def main():
         **vp
     }]).to_csv(os.path.join(TAB_DIR, "variation_partitioning_3set.csv"), index=False)
 
-    # ---------------------------------------------------------
     # Sensitivity to match threshold (unique AAQ stations)
-    # ---------------------------------------------------------
     sens_rows = []
     for thr in MATCH_THRESHOLDS:
         df_thr = match_nutrients_to_aaq(
@@ -891,16 +874,12 @@ def main():
     sens_df = pd.DataFrame(sens_rows)
     sens_df.to_csv(os.path.join(TAB_DIR, "match_distance_sensitivity_uniqueAAQ.csv"), index=False)
 
-    # ---------------------------------------------------------
-    # Partial Spearman (matched subset)
-    # ---------------------------------------------------------
+    # Partial Spearman analysis (matched subset)
     rho, pval, qval = partial_spearman_matrix(d0, NUTR_COLS, AAQ_STATE_COLS, "dist_inlet_km")
     pd.DataFrame(rho, index=NUTR_COLS, columns=AAQ_STATE_COLS).to_csv(os.path.join(TAB_DIR, "partial_spearman_rho.csv"))
     pd.DataFrame(qval, index=NUTR_COLS, columns=AAQ_STATE_COLS).to_csv(os.path.join(TAB_DIR, "partial_spearman_qFDR.csv"))
 
-    # ---------------------------------------------------------
-    # Predictor arrows (top 6)
-    # ---------------------------------------------------------
+    # Top six predictor arrows
     top_arrows = []
     Xpred = d0[["dist_inlet_km"] + NUTR_COLS].to_numpy(float)
     XpredZ = StandardScaler().fit_transform(Xpred)
@@ -914,9 +893,7 @@ def main():
         arrows = sorted(arrows, key=lambda x: x[3], reverse=True)
         top_arrows = arrows[:6]
 
-    # ---------------------------------------------------------
     # Regime fingerprint (matched subset)
-    # ---------------------------------------------------------
     fingerprint_cols = AAQ_STATE_COLS + ["dist_inlet_km"] + NUTR_COLS
     F = d0[fingerprint_cols].copy()
     Fz = pd.DataFrame(StandardScaler().fit_transform(F.to_numpy(float)), columns=fingerprint_cols)
@@ -927,14 +904,14 @@ def main():
     reg_med.to_csv(os.path.join(TAB_DIR, "regime_fingerprint_standardized_medians.csv"))
 
     # =============================================================================
-    # FIGURE 1 (MAIN) — 4 panels
+    # Figure 1 (main): 4 panels
     # =============================================================================
     cols = regime_colors(N_REGIMES)
 
     fig1 = plt.figure(figsize=(20, 11))
     gs1 = fig1.add_gridspec(2, 2, wspace=0.25, hspace=0.30)
 
-    # A) Regime map (ALL AAQ)
+    # A) Regime map (all AAQ stations)
     axA = fig1.add_subplot(gs1[0, 0])
     src, tf = (None, None)
     try:
@@ -956,21 +933,21 @@ def main():
                         edgecolor="black", linewidth=0.35, color=cols[r], zorder=3,
                         label=f"Regime {r}")
 
-        # matched subset rings
+        # Rings show matched subset stations
         axA.scatter(x_all[mask_match], y_all[mask_match],
                     facecolors="none", edgecolors="white", s=260, linewidth=2.0, zorder=6)
 
-        # inlet
+        # Inlet marker
         xi, yi = tf([INLET_LATLON[1]], [INLET_LATLON[0]])
         axA.scatter(xi, yi, marker="*", s=420, edgecolor="black", linewidth=0.8,
                     color="gold", zorder=7)
 
-        # nutrient sites
+        # Nutrient site markers
         xN, yN = tf(nutr["nut_lon"].to_numpy(float), nutr["nut_lat"].to_numpy(float))
         axA.scatter(xN, yN, marker="^", s=70, facecolor="none",
                     edgecolor="white", linewidth=1.1, alpha=0.85, zorder=4)
 
-        # set extent to raster bounds if available
+        # Keep map extent aligned to raster bounds when available
         if src is not None:
             b = src.bounds
             axA.set_xlim(b.left, b.right)
@@ -993,7 +970,7 @@ def main():
         except Exception:
             pass
 
-    # B) PCA regimes (ALL AAQ)
+    # B) PCA regimes (all AAQ stations)
     axB = fig1.add_subplot(gs1[0, 1])
     for r in range(N_REGIMES):
         m = reg_all == r
@@ -1010,11 +987,11 @@ def main():
     axB.set_ylabel(f"PC2 ({pca_all.explained_variance_ratio_[1]*100:.1f}%)")
     axB.grid(True, alpha=0.20)
 
-    # C) Mixing axis by regime (distance-to-inlet)
+    # C) Mixing axis by regime (distance to inlet)
     axC = fig1.add_subplot(gs1[1, 0])
     dist = aaq_use["dist_inlet_km"].to_numpy(float)
 
-    # boxplot per regime
+    # Boxplot by regime
     data = [dist[reg_all == r] for r in range(N_REGIMES)]
     bp = axC.boxplot(data, patch_artist=True, widths=0.55, showfliers=False)
 
@@ -1024,14 +1001,14 @@ def main():
         patch.set_edgecolor("black")
         patch.set_linewidth(1.0)
 
-    # jittered points for all stations (faint)
+    # Faint jittered points for all stations
     rng = np.random.default_rng(RANDOM_SEED)
     for r in range(N_REGIMES):
         yy = dist[reg_all == r]
         xx = (r + 1) + rng.normal(0, 0.06, size=len(yy))
         axC.scatter(xx, yy, s=18, alpha=0.25, color=cols[r], edgecolor="none", zorder=2)
 
-    # open circles for matched subset
+    # Open circles for matched subset
     aaq_match = aaq_use.loc[mask_match, [group_col, "regime", "dist_inlet_km"]].copy()
     for r in range(N_REGIMES):
         yy = aaq_match.loc[aaq_match["regime"] == r, "dist_inlet_km"].to_numpy(float)
@@ -1044,13 +1021,13 @@ def main():
     axC.set_title("C) Mixing axis: distance-to-inlet differs across regimes\n(open circles = matched subset)")
     axC.grid(True, axis="y", alpha=0.20)
 
-    # D) Variation partitioning bars (unique contributions) + total dashed line
+    # D) Variation-partitioning bars (unique contributions) + total dashed line
     axD = fig1.add_subplot(gs1[1, 1])
     uniq = [vp["plot_uniq_X1"], vp["plot_uniq_X2"], vp["plot_uniq_X3"]]
     labels = ["Unique\nDistance", "Unique\nNutrients", "Unique\nSpace"]
     axD.bar(np.arange(3), uniq, alpha=0.95)
 
-    # total line
+    # Total explained fraction line
     if np.isfinite(vp["AdjR2_full"]):
         axD.axhline(vp["AdjR2_full"], linestyle="--", linewidth=1.6)
     axD.set_xticks(np.arange(3)); axD.set_xticklabels(labels)
@@ -1069,7 +1046,7 @@ def main():
     plt.close(fig1)
 
     # =============================================================================
-    # FIGURE 2 (SUPP) — 4 panels (2×2), reorganized
+    # Figure 2 (supplementary): 4 panels in a 2x2 layout
     # =============================================================================
     fig2 = plt.figure(figsize=(20, 12))
     gs2 = fig2.add_gridspec(2, 2, wspace=0.25, hspace=0.30)
@@ -1083,7 +1060,7 @@ def main():
         cb = fig2.colorbar(sc, ax=axS1, fraction=0.046, pad=0.03)
         cb.set_label("Distance to inlet (km)")
 
-        # scale arrows
+        # Scale arrows to fit panel range
         xr = np.ptp(Zfit2[:, 0]) if np.ptp(Zfit2[:, 0]) > 0 else 1.0
         yr = np.ptp(Zfit2[:, 1]) if np.ptp(Zfit2[:, 1]) > 0 else 1.0
         scale = 0.40 * min(xr, yr)

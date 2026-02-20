@@ -2,23 +2,22 @@
 # Copyright Ahmed Eladawy
 
 """
-CHIRPS seasonal redistribution + wetting mechanism (POINT-BASED, 2003–2023)
-Nature-style multi-panel figure that makes "seasonal shift" explicit.
+CHIRPS seasonal redistribution and wetting-mechanism analysis (point-based, 2003-2023).
 
-Key features:
-- Baseline vs late monthly climatology (with IQR across years)
-- Late-minus-baseline monthly deltas with bootstrap 95% CI
-- Frequency–intensity decomposition: WetDays vs SDII
-- Timing index: rainfall centroid DOY (trend = seasonal shift)
-- Amplified months: max wetting + max drying month (points-median time series)
-- Robust basemap tiles (ESRI/OSM) with safe fallback during savefig()
+This script builds a multi-panel figure that highlights how rainfall seasonality shifted over time.
+Main components:
+- Baseline vs late monthly climatology with IQR across years.
+- Late-minus-baseline monthly deltas with bootstrap 95% confidence intervals.
+- Frequency-intensity decomposition using WetDays and SDII.
+- Timing index based on rainfall-centroid day of year.
+- Time series for the most amplified wetting and drying months.
+- Tile basemap support (ESRI/OSM) with a safe fallback if tile rendering fails.
 
-Definitions (ETCCDI-consistent):
+Definitions (ETCCDI-aligned):
 - Wet day: P >= WET_THRESH (mm/day)
-- Monthly PRCPTOT: monthly sum over wet days (not all days)
-- Monthly WetDays: count of wet days in month
+- Monthly PRCPTOT: monthly sum over wet days
+- Monthly WetDays: number of wet days per month
 - Monthly SDII: PRCPTOT / WetDays
-
 """
 
 import os
@@ -46,7 +45,7 @@ from cartopy.io.img_tiles import GoogleWTS, OSM
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 # =============================================================================
-# USER SETTINGS
+# Configuration
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data", "chirps_geotiff")  # <-- set your CHIRPS GeoTIFF folder
@@ -101,7 +100,7 @@ BOOT_SEED = 123
 
 
 # =============================================================================
-# I/O: GeoTIFF loading
+# GeoTIFF loading
 # =============================================================================
 def _parse_date_from_name(fname: str) -> Optional[pd.Timestamp]:
     base = os.path.basename(fname)
@@ -190,7 +189,7 @@ def load_chirps_from_dir(data_dir: str, var_name="precip") -> xr.DataArray:
 
 
 # =============================================================================
-# Point selection
+# Point selection helpers
 # =============================================================================
 def _bbox_mask(da2: xr.DataArray, bbox: Tuple[float, float, float, float]) -> xr.DataArray:
     lon0, lon1, lat0, lat1 = bbox
@@ -242,7 +241,7 @@ def select_points_maximin(mask_xy: xr.DataArray, n: int, min_sep_deg: float, see
 
 
 # =============================================================================
-# Stats
+# Statistical helpers
 # =============================================================================
 def theilsen_mk_slope_per_decade(y: np.ndarray, years: np.ndarray) -> Tuple[float, float]:
     msk = np.isfinite(y) & np.isfinite(years)
@@ -267,7 +266,7 @@ def rolling_mean_centered(y: np.ndarray, win: int = 5) -> np.ndarray:
 
 
 # =============================================================================
-# Basemap tiles (robust)
+# Basemap tiles
 # =============================================================================
 class EsriImagery(GoogleWTS):
     def _image_url(self, tile):
@@ -311,7 +310,7 @@ def tidy_axes(ax):
 
 
 # =============================================================================
-# Monthly metrics at points
+# Monthly metrics at selected points
 # =============================================================================
 def compute_monthly_point_metrics(daily_pts: xr.DataArray, wet_thresh: float):
     """
@@ -426,7 +425,7 @@ def month_series(df: pd.DataFrame, month: int) -> Tuple[np.ndarray, np.ndarray]:
 
 
 # =============================================================================
-# Figure builder
+# Figure assembly
 # =============================================================================
 def build_figure(extent, labels, pts,
                  df_tot, df_wd, df_sdii,
@@ -449,7 +448,7 @@ def build_figure(extent, labels, pts,
     months = np.arange(1, 13)
     monlab = [pd.Timestamp(2000, m, 1).strftime("%b") for m in months]
 
-    # climatologies
+    # Monthly climatologies
     base_mean_T, base_q25_T, base_q75_T = period_climatology(df_tot, base_year0, base_year1)
     late_mean_T, late_q25_T, late_q75_T = period_climatology(df_tot, late_year0, late_year1)
 
@@ -459,7 +458,7 @@ def build_figure(extent, labels, pts,
     base_mean_S, base_q25_S, base_q75_S = period_climatology(df_sdii, base_year0, base_year1)
     late_mean_S, late_q25_S, late_q75_S = period_climatology(df_sdii, late_year0, late_year1)
 
-    # deltas + CI
+    # Monthly deltas and confidence intervals
     base_years = np.arange(base_year0, base_year1 + 1)
     late_years = np.arange(late_year0, late_year1 + 1)
 
@@ -467,15 +466,15 @@ def build_figure(extent, labels, pts,
     dW, loW, hiW = bootstrap_delta_by_month(df_wd,  base_years, late_years, nboot, seed+1)
     dS, loS, hiS = bootstrap_delta_by_month(df_sdii, base_years, late_years, nboot, seed+2)
 
-    # months to amplify (from delta totals)
+    # Months with strongest wetting and drying shifts
     wet_month = int(np.nanargmax(dT) + 1)
     dry_month = int(np.nanargmin(dT) + 1)
 
-    # timing index
+    # Rainfall timing index
     yrsC, centDOY = rainfall_centroid_doy(df_tot)
     slopeC, pC = theilsen_mk_slope_per_decade(centDOY, yrsC.astype("float64"))
 
-    # time series for amplified months (monthly totals, points-median)
+    # Time series for amplified months (monthly totals, median across points)
     yrs_wet, ts_wet = month_series(df_tot, wet_month)
     yrs_dry, ts_dry = month_series(df_tot, dry_month)
     sm_wet = rolling_mean_centered(ts_wet, 5)
@@ -483,7 +482,7 @@ def build_figure(extent, labels, pts,
     slope_wet, p_wet = theilsen_mk_slope_per_decade(ts_wet, yrs_wet.astype("float64"))
     slope_dry, p_dry = theilsen_mk_slope_per_decade(ts_dry, yrs_dry.astype("float64"))
 
-    # ---- Layout: 3 rows x 4 cols (10 panels used) ----
+    # Layout: 3 rows x 4 columns (10 panels)
     fig = plt.figure(figsize=(21.0, 12.5), dpi=FIG_DPI)
     gs = GridSpec(nrows=3, ncols=4, figure=fig, hspace=0.45, wspace=0.32)
 
@@ -500,7 +499,7 @@ def build_figure(extent, labels, pts,
         axA.text(lon + 0.01, lat + 0.005, lab, transform=ccrs.PlateCarree(), fontsize=9, zorder=4,
                  bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.7))
 
-    # Helper: climatology line w/ IQR
+    # Helper: climatology lines with IQR ribbons
     def plot_clim(ax, base_mean, base_q25, base_q75, late_mean, late_q25, late_q75, title, ylab):
         ax.set_title(title, loc="left", fontweight="bold")
         ax.plot(months, base_mean, lw=2.0, label=f"Baseline ({base_year0}-{base_year1})")
@@ -513,7 +512,7 @@ def build_figure(extent, labels, pts,
         ax.grid(True, axis="y", alpha=0.25)
         tidy_axes(ax)
 
-    # Helper: delta bars with CI
+    # Helper: delta bars with confidence intervals
     def plot_delta(ax, delta, lo, hi, title, ylab):
         ax.set_title(title, loc="left", fontweight="bold")
         ax.bar(months, delta)
@@ -524,7 +523,7 @@ def build_figure(extent, labels, pts,
         ax.set_ylabel(ylab)
         ax.grid(True, axis="y", alpha=0.25)
         tidy_axes(ax)
-        # significance star if CI excludes 0
+        # Add a star when the CI does not cross zero
         ymax = np.nanmax(np.abs(delta)) if np.isfinite(delta).any() else 1.0
         for i, m in enumerate(months):
             if np.isfinite(lo[i]) and np.isfinite(hi[i]) and (lo[i] > 0 or hi[i] < 0):
@@ -543,12 +542,12 @@ def build_figure(extent, labels, pts,
     axC = fig.add_subplot(gs[0, 3])
     plot_delta(axC, dT, loT, hiT, "c  Δ PRCPTOT (late − baseline)", "mm month$^{-1}$")
 
-    # d: climatology wetdays
+    # d: climatology wet days
     axD = fig.add_subplot(gs[1, 0:2])
     plot_clim(axD, base_mean_W, base_q25_W, base_q75_W, late_mean_W, late_q25_W, late_q75_W,
               "d  Seasonal cycle of wet-day frequency (WetDays)", "days month$^{-1}$")
 
-    # e: delta wetdays
+    # e: delta wet days
     axE = fig.add_subplot(gs[1, 2])
     plot_delta(axE, dW, loW, hiW, "e  Δ WetDays (late − baseline)", "days month$^{-1}$")
 
@@ -574,7 +573,7 @@ def build_figure(extent, labels, pts,
              transform=axH.transAxes, fontsize=9,
              bbox=dict(fc="white", ec="none", alpha=0.75))
 
-    # i: amplified wetting month TS
+    # i: amplified wetting month time series
     axI = fig.add_subplot(gs[2, 2])
     wet_name = pd.Timestamp(2000, wet_month, 1).strftime("%b")
     axI.set_title(f"i  Amplified wetting month: {wet_name} PRCPTOT", loc="left", fontweight="bold")
@@ -590,7 +589,7 @@ def build_figure(extent, labels, pts,
              transform=axI.transAxes, fontsize=9,
              bbox=dict(fc="white", ec="none", alpha=0.75))
 
-    # j: amplified drying month TS
+    # j: amplified drying month time series
     axJ = fig.add_subplot(gs[2, 3])
     dry_name = pd.Timestamp(2000, dry_month, 1).strftime("%b")
     axJ.set_title(f"j  Amplified drying month: {dry_name} PRCPTOT", loc="left", fontweight="bold")
@@ -606,8 +605,10 @@ def build_figure(extent, labels, pts,
              transform=axJ.transAxes, fontsize=9,
              bbox=dict(fc="white", ec="none", alpha=0.75))
 
+    point_span = f"{labels[0]}-{labels[-1]}" if len(labels) >= 2 else labels[0]
     fig.suptitle(
-        "CHIRPS seasonal redistribution over Batan Bay upstream (P1–P7): explicit seasonal shift + frequency–intensity mechanism (2003–2023)",
+        f"CHIRPS seasonal redistribution over Batan Bay upstream ({point_span}): "
+        "explicit seasonal shift + frequency-intensity mechanism (2003-2023)",
         y=0.995, fontweight="bold"
     )
 
@@ -625,7 +626,7 @@ def build_figure(extent, labels, pts,
 
 
 # =============================================================================
-# MAIN
+# Main execution
 # =============================================================================
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -647,13 +648,13 @@ def main():
     da = da.chunk({"time": 365, "y": 256, "x": 256})
     extent = (float(da["x"].min()), float(da["x"].max()), float(da["y"].min()), float(da["y"].max()))
 
-    # mask for point selection
+    # Build mask for point selection
     base = da.sel(time=slice(np.datetime64(BASELINE_START), np.datetime64(BASELINE_END)))
     with ProgressBar():
         p95 = base.quantile(0.95, dim="time").compute()
     mask = xr.where(np.isfinite(p95), True, False)
 
-    # points
+    # Choose points
     if USE_MANUAL_POINTS:
         labels = [lab for lab, _, _ in MANUAL_POINTS]
         pts = [(lon, lat) for _, lon, lat in MANUAL_POINTS]
@@ -673,7 +674,7 @@ def main():
     for lab, (lon, lat) in zip(labels, pts):
         print(f"  {lab}: ({lon:.6f}, {lat:.6f})")
 
-    # extract point series
+    # Extract point time series
     daily_pts = []
     for lab, (lon, lat) in zip(labels, pts):
         s = da.sel(x=lon, y=lat, method="nearest").rename(lab)
@@ -681,7 +682,7 @@ def main():
     daily_pts = xr.concat(daily_pts, dim="point")
     daily_pts = daily_pts.assign_coords(point=("point", labels)).transpose("time", "point")
 
-    # monthly metrics
+    # Compute monthly metrics
     print("Computing monthly point metrics...")
     mon_tot, mon_wd, mon_sdii = compute_monthly_point_metrics(daily_pts, WET_THRESH)
 

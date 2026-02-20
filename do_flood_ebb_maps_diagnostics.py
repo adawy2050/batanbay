@@ -2,16 +2,14 @@
 # Copyright Ahmed Eladawy
 
 """
-Fig.6-style DO figure (2024): 2 rows of maps (Flood/Ebb) + 3rd row spatial diagnostics.
+Figure 6-style dissolved oxygen plot for 2024.
 
-Updates in this version:
-- Crop EMPTY map margins: compute ONE shared tight extent from Flood+Ebb points,
-  then apply it identically to ALL 6 map panels (both rows, all thirds).
-- Keeps washed/transparent basemap style consistent with Fig.5.
-- Diagnostics row: y-axis label ONLY on left panel.
+The figure has:
+- Row 1: flood-tide maps (top/mid/bottom depth thirds)
+- Row 2: ebb-tide maps (top/mid/bottom depth thirds)
+- Row 3: spatial diagnostics (DO vs distance to inlet)
 
-OUTPUT:
-- Fig6_DO_2024_Tide_DepthThirds_MapsPlusDiagnostics.png
+This version uses one shared map extent for all six maps so the panels are directly comparable.
 """
 
 import os
@@ -32,7 +30,7 @@ from matplotlib.patches import Rectangle
 
 
 # =========================
-# 0) USER SETTINGS
+# Configuration
 # =========================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data", "AAQ", "EXTRACTED2024")
@@ -56,11 +54,11 @@ FLOOD_MARKER = "o"
 EBB_MARKER = "^"
 MS_DIAG = 35
 
-# Basemap wash to match Fig.5 style
+# Basemap wash style (kept consistent with Fig. 5)
 BASEMAP_ALPHA = 0.70
 WHITE_WASH_ALPHA = 0.28
 
-# >>> NEW: shared crop for ALL maps (increase to zoom out; decrease to zoom in)
+# Shared crop for all map panels
 MAP_PAD_FRAC = 0.06  # 6% padding around station envelope (in map CRS)
 
 # Diagnostics axis limits
@@ -74,7 +72,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 
 # =========================
-# 1) HELPERS
+# Helper functions
 # =========================
 def dms_to_dd_robust(x):
     if pd.isna(x):
@@ -167,7 +165,7 @@ def pick_csv_with_required_columns(folder, required_cols):
 
 
 # =========================
-# 2) LOAD DATA + STANDARDIZE
+# Load and standardize data
 # =========================
 LAT_COL = "Latitude"
 LON_COL = "Longitude"
@@ -193,7 +191,7 @@ df = df.dropna(subset=["lat_dd", "lon_dd", DEPTH_COL, DO_COL, "station_id"])
 
 
 # =========================
-# 3) SPLIT FLOOD/EBB
+# Split flood and ebb subsets
 # =========================
 tide_col = None
 for c in df.columns:
@@ -219,7 +217,7 @@ if flood_df.empty or ebb_df.empty:
 
 
 # =========================
-# 4) AGGREGATE: station x thirds
+# Aggregate per station and depth third
 # =========================
 def build_station_thirds_table(df_phase, phase_name):
     records = []
@@ -252,7 +250,7 @@ for col in ["do_top", "do_mid", "do_bot"]:
 
 
 # =========================
-# 5) LOAD BASEMAP + PROJECT
+# Load basemap and project station coordinates
 # =========================
 with rasterio.open(BASEMAP_TIF) as src:
     raster_crs = src.crs
@@ -270,7 +268,7 @@ gdf_ebb = gpd.GeoDataFrame(
     crs="EPSG:4326"
 ).to_crs(raster_crs)
 
-# >>> NEW: compute ONE shared crop extent from union of Flood+Ebb points
+# Compute one shared crop extent from flood + ebb points
 geom_all = pd.concat([gdf_flood.geometry, gdf_ebb.geometry], ignore_index=True)
 xmin, ymin, xmax, ymax = gpd.GeoSeries(geom_all, crs=raster_crs).total_bounds
 
@@ -288,7 +286,7 @@ MAP_EXTENT = (crop_left, crop_right, crop_bottom, crop_top)
 
 
 # =========================
-# 6) PLOT: 3 rows x 3 cols
+# Plot: 3 rows x 3 columns
 # =========================
 fig = plt.figure(figsize=(16, 15.5))
 gs = fig.add_gridspec(
@@ -327,14 +325,14 @@ def draw_map(ax, gdf, col, title):
     for spine in ax.spines.values():
         spine.set_linewidth(0.8)
 
-# Row 1: Flood maps
+# Row 1: flood maps
 axes_row1 = []
 for j, (col, name) in enumerate(third_keys):
     ax = fig.add_subplot(gs[0, j])
     draw_map(ax, gdf_flood, col, f"Flood {name}")
     axes_row1.append(ax)
 
-# Row 2: Ebb maps
+# Row 2: ebb maps
 axes_row2 = []
 for j, (col, name) in enumerate(third_keys):
     ax = fig.add_subplot(gs[1, j])

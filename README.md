@@ -1,6 +1,6 @@
 # Batan Bay Hydroclimate and Water Quality Analyses
 
-This repository contains the analysis scripts for the manuscript under submission:
+This repository contains the analysis scripts for a manuscript currently under review:
 
 Hydroclimate redistribution, nutrient hotspots, and tide--depth oxygen structure in a tropical estuary with recurrent HAB impacts (Batan Bay, Philippines)
 

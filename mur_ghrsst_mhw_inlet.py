@@ -2,12 +2,13 @@
 # Copyright Ahmed Eladawy
 
 """
-MUR GHRSST (daily) inlet-nearest point extraction + Hobday MHW diagnostics (2003–2023)
-- Robust nearest *valid ocean* pixel selection near inlet (avoids land mask NaNs)
-- Hobday MHW detection (90th pct threshold; ±5-d doy window; min duration 5 d)
-- Nature-style 2×2 figure + LaTeX event table for 2015–present
+MUR GHRSST inlet analysis and Hobday MHW diagnostics (2003-2023).
 
-Author: (your workflow) | Last update: 2026-02-06
+What this script does:
+- Finds the nearest valid ocean pixel to the inlet (avoids land-mask NaNs).
+- Extracts the daily SST series and computes monthly anomalies.
+- Detects marine heatwave events using Hobday-style thresholds.
+- Exports CSV outputs, a 2x2 summary figure, and a LaTeX table of top events since 2015.
 """
 
 import os
@@ -28,7 +29,7 @@ warnings.filterwarnings("ignore", message=".*'Y' is deprecated.*", category=Futu
 warnings.filterwarnings("ignore", message=".*resample.*", category=FutureWarning)
 
 # =============================================================================
-# USER SETTINGS
+# Configuration
 # =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data", "ghrsst")
@@ -37,7 +38,7 @@ PATTERN  = os.path.join(DATA_DIR, "*JPL-L4_GHRSST-SSTfnd-MUR-GLOB*.nc4")
 INLET_LATLON = (11.596509, 122.492519)  # (lat, lon)
 T0, T1 = "2003-01-01", "2023-12-31"
 
-# Point selection robustness
+# Point-selection robustness
 SEARCH_RADIUS_KM = 10.0   # local search radius around inlet
 MAX_CANDIDATES   = 200    # cap candidate points checked (for speed)
 
@@ -46,7 +47,7 @@ MHW_PCT = 90
 MIN_DURATION_D = 5
 DOY_HALF_WINDOW = 5  # ±5 days around DOY (11-day window)
 
-# Outputs
+# Output paths
 OUT_DIR = os.path.join(BASE_DIR, "outputs", "ghrsst_inlet")
 os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -59,7 +60,7 @@ CSV_EVENTS  = os.path.join(OUT_DIR, "hobday_mhw_events_2003_2023.csv")
 TEX_EVENTS_2015 = os.path.join(OUT_DIR, "hobday_mhw_events_2015_present_top.tex")
 
 # =============================================================================
-# HELPERS
+# Helper functions
 # =============================================================================
 def haversine_km(lat1, lon1, lat2, lon2):
     """Vectorized haversine distance (km)."""
@@ -85,8 +86,8 @@ def _get_lon_adjusted(ds_lon, target_lon):
     lon_max = float(np.nanmax(ds_lon))
     if lon_min >= 0 and lon_max > 180:  # 0..360
         return target_lon % 360.0
-    # else assume -180..180 or small domain
-    # also handle if data is 0..180 but target is negative (rare here)
+    # Otherwise assume -180..180 (or a limited regional domain)
+    # Also handle the rare case where data are 0..180 and target lon is negative
     if target_lon > 180:
         return ((target_lon + 180) % 360) - 180
     return target_lon
@@ -98,11 +99,11 @@ def _decode_sst_to_c(da):
     - Enforce float + mask unrealistic values
     """
     da = da.astype("float64")
-    # Many GHRSST store Kelvin
+    # Many GHRSST products are stored in Kelvin
     vmed = float(da.quantile(0.5, skipna=True))
     if vmed > 100:  # Kelvin-like
         da = da - 273.15
-    # mask absurd values
+    # Mask physically unrealistic values
     da = da.where(np.isfinite(da))
     da = da.where((da > -5) & (da < 45))
     return da
@@ -142,8 +143,8 @@ def pick_nearest_valid_ocean_pixel(sample_file, inlet_lat, inlet_lon,
 
         inlet_lon_adj = _get_lon_adjusted(lon, inlet_lon)
 
-        # Build candidate indices in a bounding box first (cheap), then refine
-        # Approx degrees per km
+        # Build candidate indices in a bounding box first, then refine by distance
+        # Approximate degrees per km
         dlat = search_radius_km / 110.574
         dlon = search_radius_km / (111.320 * np.cos(np.deg2rad(inlet_lat)) + 1e-12)
 
@@ -153,18 +154,18 @@ def pick_nearest_valid_ocean_pixel(sample_file, inlet_lat, inlet_lon,
         ilat = np.where(lat_mask)[0]
         ilon = np.where(lon_mask)[0]
         if ilat.size == 0 or ilon.size == 0:
-            # fallback to nearest by index (still may be land)
+            # Fallback to nearest index (may still land on masked cells)
             ilat = np.array([int(np.argmin(np.abs(lat - inlet_lat)))])
             ilon = np.array([int(np.argmin(np.abs(lon - inlet_lon_adj)))])
 
-        # candidate grid points
+        # Candidate grid points
         LAT2, LON2 = np.meshgrid(lat[ilat], lon[ilon], indexing="ij")
         dist = haversine_km(inlet_lat, inlet_lon_adj, LAT2, LON2).reshape(-1)
 
         order = np.argsort(dist)
         order = order[:max_candidates]
 
-        # variable name
+        # SST variable name
         var = None
         for v in ["analysed_sst", "sst", "sea_surface_temperature"]:
             if v in ds.data_vars:
@@ -176,7 +177,7 @@ def pick_nearest_valid_ocean_pixel(sample_file, inlet_lat, inlet_lon,
         da = ds[var].isel(time=0) if "time" in ds[var].dims else ds[var]
         da = _decode_sst_to_c(da)
 
-        # check candidates for first valid
+        # Return the first valid ocean candidate
         flat_ij = np.array(np.unravel_index(order, LAT2.shape)).T  # rows/cols in LAT2
         for rr, cc in flat_ij:
             lat_idx = ilat[rr]
@@ -202,7 +203,7 @@ def extract_point_timeseries(files, lat_name, lon_name, target_lat, target_lon):
     for fn in files:
         try:
             with xr.open_dataset(fn, engine="netcdf4", decode_times=True, decode_timedelta=False) as ds:
-                # find sst var
+                # Find SST variable
                 var = None
                 for v in ["analysed_sst", "sst", "sea_surface_temperature"]:
                     if v in ds.data_vars:
@@ -213,7 +214,7 @@ def extract_point_timeseries(files, lat_name, lon_name, target_lat, target_lon):
 
                 lat = ds[lat_name].values
                 lon = ds[lon_name].values
-                # ensure lon alignment
+                # Ensure longitude convention matches the dataset
                 target_lon_adj = _get_lon_adjusted(lon, target_lon)
 
                 i_lat = int(np.argmin(np.abs(lat - target_lat)))
@@ -225,7 +226,7 @@ def extract_point_timeseries(files, lat_name, lon_name, target_lat, target_lon):
                 t = pd.to_datetime(ds["time"].values)
                 y = da.values
 
-                # y can be scalar or array depending on time length
+                # `y` may be scalar or array depending on file structure
                 if np.ndim(y) == 0:
                     rows.append((t[0], float(y)))
                 else:
@@ -252,7 +253,7 @@ def within_year_cumulative_monthly(anom_monthly):
     return df
 
 # =============================================================================
-# HOBDAY MHW (single-point) IMPLEMENTATION
+# Hobday MHW (single-point) implementation
 # =============================================================================
 @dataclass
 class MHWEvent:
@@ -273,7 +274,7 @@ def compute_hobday_threshold_and_clim(daily_sst: pd.Series,
     Returns aligned series: clim_mean, thresh, and a "seasonal exceedance scale" (thresh - clim).
     """
     s = daily_sst.dropna().copy()
-    # drop Feb 29 to stabilize DOY mapping
+    # Drop Feb 29 to keep a stable 365-day DOY mapping
     is_feb29 = (s.index.month == 2) & (s.index.day == 29)
     s = s.loc[~is_feb29]
 
@@ -284,8 +285,7 @@ def compute_hobday_threshold_and_clim(daily_sst: pd.Series,
     thresh = np.full_like(vals, np.nan, dtype="float64")
     delta = np.full_like(vals, np.nan, dtype="float64")
 
-    # pre-index by DOY for speed
-    # mapping DOY -> indices in full record
+    # Pre-index by DOY for faster window lookups
     idx_by_doy = {}
     for d in range(1, 366):
         idx_by_doy[d] = np.where(doy == d)[0]
@@ -293,7 +293,7 @@ def compute_hobday_threshold_and_clim(daily_sst: pd.Series,
     for i, d in enumerate(doy):
         lo = d - doy_half_window
         hi = d + doy_half_window
-        # wrap around year
+        # Wrap around the year at boundaries
         window_days = []
         for dd in range(lo, hi + 1):
             if dd < 1:
@@ -329,7 +329,7 @@ def detect_mhw_events(daily_sst: pd.Series,
     Category based on multiples of delta (threshold - clim):
       I: 1–2x (Moderate), II: 2–3x (Strong), III: 3–4x (Severe), IV: >=4x (Extreme)
     """
-    # Align
+    # Align all series on a shared index
     idx = daily_sst.index.intersection(clim.index).intersection(thresh.index).intersection(delta.index)
     s = daily_sst.loc[idx]
     c = clim.loc[idx]
@@ -342,9 +342,9 @@ def detect_mhw_events(daily_sst: pd.Series,
     if exceed.sum() == 0:
         return events, exceed
 
-    # find runs
+    # Find exceedance runs
     flag = exceed.values.astype(int)
-    # run boundaries
+    # Run boundaries
     starts = np.where(np.diff(np.r_[0, flag]) == 1)[0]
     ends   = np.where(np.diff(np.r_[flag, 0]) == -1)[0] - 1
 
@@ -362,8 +362,7 @@ def detect_mhw_events(daily_sst: pd.Series,
         mean_int = float(np.nanmean(intensity.values))
         cum_int = float(np.nansum(intensity.values))  # °C·d
 
-        # category based on peak intensity relative to delta (as Hobday)
-        # use contemporaneous delta at peak day
+        # Assign Hobday category from peak intensity relative to local delta
         peak_day = intensity.idxmax()
         peak_delta = float(seg_d.loc[peak_day])
         if not np.isfinite(peak_delta) or peak_delta <= 0:
@@ -405,7 +404,7 @@ def df_to_latex_table(df, caption, label):
     d = df.copy()
     d["start"] = pd.to_datetime(d["start"]).dt.strftime("%Y-%m-%d")
     d["end"] = pd.to_datetime(d["end"]).dt.strftime("%Y-%m-%d")
-    # format
+    # Format numeric columns
     for col in ["peak_intensity_c","mean_intensity_c","cum_intensity_cdays"]:
         d[col] = d[col].map(lambda x: f"{x:.2f}")
     d["duration_d"] = d["duration_d"].astype(int).astype(str)
@@ -430,7 +429,7 @@ def df_to_latex_table(df, caption, label):
     return "\n".join(lines)
 
 # =============================================================================
-# MAIN
+# Main execution
 # =============================================================================
 def main():
     all_files = sorted(glob.glob(PATTERN))
@@ -443,7 +442,7 @@ def main():
 
     inlet_lat, inlet_lon = INLET_LATLON
 
-    # 1) pick nearest valid ocean pixel (critical to avoid NaN-empty plots)
+    # 1) Pick nearest valid ocean pixel (avoids empty/NaN series near land)
     lat_name, lon_name, px_lat, px_lon, px_dist_km = pick_nearest_valid_ocean_pixel(
         good_files[len(good_files)//2],
         inlet_lat, inlet_lon,
@@ -452,7 +451,7 @@ def main():
     )
     print(f"[POINT] inlet=({inlet_lat:.6f},{inlet_lon:.6f}) -> ocean pixel=({px_lat:.6f},{px_lon:.6f}), dist={px_dist_km:.3f} km")
 
-    # 2) extract daily series
+    # 2) Extract daily SST series
     df = extract_point_timeseries(good_files, lat_name, lon_name, px_lat, px_lon)
     df = df[(df["time"] >= pd.to_datetime(T0)) & (df["time"] <= pd.to_datetime(T1))].copy()
     df = df.sort_values("time").reset_index(drop=True)
@@ -463,34 +462,34 @@ def main():
     sst_daily = pd.Series(df["sst_c"].values, index=pd.to_datetime(df["time"]), name="sst_c").sort_index()
     sst_daily = sst_daily[~sst_daily.index.duplicated(keep="first")]
 
-    # Save daily
+    # Save daily SST
     df_out = pd.DataFrame({"time": sst_daily.index, "sst_c": sst_daily.values})
     df_out.to_csv(CSV_DAILY, index=False)
 
-    # 3) monthly mean
+    # 3) Monthly mean and anomalies
     sst_monthly = sst_daily.resample("MS").mean()
     clim_month, anom_month = monthly_climatology_anomaly(sst_monthly)
 
-    # thresholds for monthly anomalies (extremes)
+    # Extreme thresholds for monthly anomalies
     warm_thr95 = float(np.nanpercentile(anom_month.values, 95))
     cold_thr05 = float(np.nanpercentile(anom_month.values, 5))
 
-    # within-year cumulative monthly anomalies
+    # Within-year cumulative monthly anomalies
     cum_df = within_year_cumulative_monthly(anom_month)
 
-    # 4) trends (keep clean: one line in each panel, minimal text)
-    # SST trend on monthly means (more stable)
+    # 4) Trend estimates
+    # SST trend on monthly means (more stable than daily)
     x_year = (sst_monthly.index - sst_monthly.index[0]).days.values / 365.25
     slope_sst, intercept_sst, r, p_sst, _ = linregress(x_year, sst_monthly.values)
 
-    # Theil–Sen (monthly SST)
+    # Theil-Sen slope (monthly SST)
     ts_slope_sst, ts_intercept_sst, _, _ = theilslopes(sst_monthly.values, x_year)
 
-    # anomaly trend (monthly)
+    # Monthly anomaly trend
     slope_an, intercept_an, r2, p_an, _ = linregress(x_year, anom_month.values)
     ts_slope_an, ts_intercept_an, _, _ = theilslopes(anom_month.values, x_year)
 
-    # 5) Hobday MHW on DAILY
+    # 5) Hobday MHW detection on daily SST
     clim_d, thr_d, delta_d = compute_hobday_threshold_and_clim(
         sst_daily, pct=MHW_PCT, doy_half_window=DOY_HALF_WINDOW
     )
@@ -500,13 +499,13 @@ def main():
     evdf = events_to_df(events)
     evdf.to_csv(CSV_EVENTS, index=False)
 
-    # For plotting MHW intensity time series
+    # Series used in MHW-intensity plots
     aligned_idx = sst_daily.index.intersection(clim_d.index).intersection(thr_d.index)
     intensity = (sst_daily.loc[aligned_idx] - clim_d.loc[aligned_idx]).rename("intensity_c")
     above_thr = (sst_daily.loc[aligned_idx] > thr_d.loc[aligned_idx])
     intensity_mhw = intensity.where(above_thr)
 
-    # 6) event list (2015+), top by cumulative intensity
+    # 6) Top events since 2015 by cumulative intensity
     ev2015 = evdf[evdf["start"] >= pd.Timestamp("2015-01-01")].copy()
     ev2015_top = ev2015.sort_values("cum_intensity_cdays", ascending=False).head(12).copy()
 
@@ -519,7 +518,7 @@ def main():
     with open(TEX_EVENTS_2015, "w", encoding="utf-8") as f:
         f.write(tex)
 
-    # 7) save monthly products
+    # 7) Save monthly products
     pd.DataFrame({
         "time": sst_monthly.index,
         "sst_monthly_c": sst_monthly.values,
@@ -527,7 +526,7 @@ def main():
     }).to_csv(CSV_MONTHLY, index=False)
 
     # =============================================================================
-    # FIGURE (Nature style, low clutter)
+    # Figure (clean 2x2 summary)
     # =============================================================================
     plt.rcParams.update({
         "font.size": 10,
@@ -547,17 +546,17 @@ def main():
     axC = fig.add_subplot(gs[0, 1])
     axD = fig.add_subplot(gs[1, 1])
 
-    # --- (A) SST with MHW shading ---
-    # daily faint
+    # (A) SST with MHW shading
+    # Daily series in faint line
     axA.plot(sst_daily.index, sst_daily.values, linewidth=0.6, alpha=0.12, label="Daily SST")
-    # monthly bold
+    # Monthly means in bold
     axA.plot(sst_monthly.index, sst_monthly.values, linewidth=1.8, label="Monthly mean SST")
 
-    # trend line (monthly OLS)
+    # Monthly OLS trend line
     yfit = intercept_sst + slope_sst * x_year
     axA.plot(sst_monthly.index, yfit, linewidth=1.6, label=f"OLS trend: {slope_sst:+.3f} °C/yr")
 
-    # shade MHW events
+    # Shade MHW events
     for e in events:
         axA.axvspan(e.start, e.end, alpha=0.10, linewidth=0)
 
@@ -566,21 +565,21 @@ def main():
     axA.grid(True, alpha=0.25)
     axA.legend(loc="upper left", frameon=False, ncol=2, handlelength=2.2, columnspacing=1.2)
 
-    # --- (B) Monthly anomalies + extremes + trend ---
+    # (B) Monthly anomalies, extreme thresholds, and trend
     axB.axhline(0, linewidth=0.9)
     axB.bar(anom_month.index, anom_month.values, width=25, alpha=0.85, label="Monthly SST anomaly")
 
-    # extreme thresholds (95/5 of anomalies)
+    # Extreme thresholds (95th and 5th percentile of anomalies)
     axB.axhline(warm_thr95, linestyle="--", linewidth=1.0, label="95th anomaly thr")
     axB.axhline(cold_thr05, linestyle="--", linewidth=1.0, label="5th anomaly thr")
 
-    # mark extreme months (minimal markers)
+    # Mark extreme months
     warm_m = anom_month[anom_month >= warm_thr95]
     cold_m = anom_month[anom_month <= cold_thr05]
     axB.scatter(warm_m.index, warm_m.values, marker="^", s=22)
     axB.scatter(cold_m.index, cold_m.values, marker="v", s=22)
 
-    # trend line
+    # Trend line
     yfit_an = intercept_an + slope_an * x_year
     axB.plot(anom_month.index, yfit_an, linewidth=1.6, label=f"Anom OLS: {slope_an:+.3f} °C/yr (p={p_an:.2g})")
 
@@ -590,8 +589,8 @@ def main():
     axB.grid(True, alpha=0.25)
     axB.legend(loc="upper left", frameon=False, ncol=2, handlelength=2.2, columnspacing=1.2)
 
-    # --- (C) Within-year cumulative monthly anomalies (resets each year) ---
-    # plot earlier years in very faint lines; highlight last 4 years
+    # (C) Within-year cumulative monthly anomalies (reset each year)
+    # Show earlier years faintly and highlight the last four years
     years = np.sort(cum_df["year"].unique())
     highlight_years = years[-4:] if years.size >= 4 else years
 
@@ -608,8 +607,8 @@ def main():
     axC.grid(True, alpha=0.25)
     axC.legend(loc="upper left", frameon=False, ncol=1)
 
-    # --- (D) MHW event time series (no table) ---
-    # event cumulative intensity as bars at event mid-date; peak intensity as points
+    # (D) MHW event intensity through time
+    # Plot cumulative intensity as bars and peak intensity as points
     if not evdf.empty:
         mid = evdf["start"] + (evdf["end"] - evdf["start"]) / 2
         axD.bar(mid, evdf["cum_intensity_cdays"].values, width=20, alpha=0.75, label="Cum intensity (°C·d)")
@@ -622,7 +621,7 @@ def main():
     axD.grid(True, alpha=0.25)
     axD.legend(loc="upper left", frameon=False)
 
-    # Suptitle (clean; no overlapping stats)
+    # Suptitle with key metrics
     n_events = len(events)
     fig.suptitle(
         f"Inlet SST + Hobday MHW diagnostics (MUR GHRSST, 2003–2023) | "
