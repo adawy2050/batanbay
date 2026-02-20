@@ -19,7 +19,6 @@ Definitions (ETCCDI-consistent):
 - Monthly WetDays: count of wet days in month
 - Monthly SDII: PRCPTOT / WetDays
 
-Author: Updated for Ahmed Eladawy
 """
 
 import os
